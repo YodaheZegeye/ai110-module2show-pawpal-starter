@@ -124,27 +124,57 @@ Scheduling Rationale:
 
 ## 🧪 Testing PawPal+
 
-```bash
-# Run the full test suite:
-pytest
+### Running the Tests
 
-# Run with coverage:
-pytest --cov
+```bash
+python -m pytest
 ```
 
-Sample test output:
+### What the Tests Cover
+
+The test suite in [`tests/test_pawpal.py`](tests/test_pawpal.py) contains **17 tests** across four categories:
+
+| Category | Tests | What They Verify |
+| :--- | :--- | :--- |
+| **Core Behavior** | `test_task_completion`, `test_task_addition` | `mark_complete()` flips status; `add_task()` grows the pet's task list |
+| **Sorting Correctness** | `test_sort_by_time`, `test_sort_by_time_already_sorted`, `test_sort_by_time_reverse_order`, `test_sort_all_untimed_tasks` | Tasks sort chronologically by `HH:MM`; already-sorted and reverse inputs produce the same order; untimed tasks group at the end |
+| **Recurrence Logic** | `test_recurring_daily_task`, `test_recurring_weekly_task`, `test_pet_mark_task_complete_recurrence`, `test_as_needed_task_no_recurrence`, `test_recurring_task_preserves_attributes` | Daily tasks recur +1 day, weekly +7 days via `timedelta`; `as-needed` tasks do **not** spawn a successor; cloned tasks inherit all original attributes |
+| **Conflict Detection** | `test_detect_conflicts_same_pet`, `test_detect_conflicts_different_pets`, `test_no_conflicts`, `test_conflict_detection_three_way`, `test_conflict_detection_no_timed_tasks` | Same-pet and cross-pet time collisions produce warnings; unique times produce none; three tasks at one time yield 3 pairwise warnings; no timed tasks return an empty list |
+
+### Test Output
 
 ```text
 ============================= test session starts =============================
-platform win32 -- Python 3.14.4, pytest-9.1.1, pluggy-1.7.0
+platform win32 -- Python 3.14.4, pytest-9.1.1, pluggy-1.7.0 -- C:\Users\yodah\Documents\Projects\ai110-module2show-pawpal-starter\.venv\Scripts\python.exe
+cachedir: .pytest_cache
 rootdir: C:\Users\yodah\Documents\Projects\ai110-module2show-pawpal-starter
 plugins: anyio-4.15.1
-collected 10 items
+collecting ... collected 17 items
 
-tests\test_pawpal.py ..........                                          [100%]
+tests/test_pawpal.py::test_task_completion PASSED                        [  5%]
+tests/test_pawpal.py::test_task_addition PASSED                          [ 11%]
+tests/test_pawpal.py::test_sort_by_time PASSED                           [ 17%]
+tests/test_pawpal.py::test_filter_tasks PASSED                           [ 23%]
+tests/test_pawpal.py::test_recurring_daily_task PASSED                   [ 29%]
+tests/test_pawpal.py::test_recurring_weekly_task PASSED                  [ 35%]
+tests/test_pawpal.py::test_pet_mark_task_complete_recurrence PASSED      [ 41%]
+tests/test_pawpal.py::test_detect_conflicts_same_pet PASSED              [ 47%]
+tests/test_pawpal.py::test_detect_conflicts_different_pets PASSED        [ 52%]
+tests/test_pawpal.py::test_no_conflicts PASSED                           [ 58%]
+tests/test_pawpal.py::test_sort_by_time_already_sorted PASSED            [ 64%]
+tests/test_pawpal.py::test_sort_by_time_reverse_order PASSED             [ 70%]
+tests/test_pawpal.py::test_sort_all_untimed_tasks PASSED                 [ 76%]
+tests/test_pawpal.py::test_as_needed_task_no_recurrence PASSED           [ 82%]
+tests/test_pawpal.py::test_recurring_task_preserves_attributes PASSED    [ 88%]
+tests/test_pawpal.py::test_conflict_detection_three_way PASSED           [ 94%]
+tests/test_pawpal.py::test_conflict_detection_no_timed_tasks PASSED      [100%]
 
-============================= 10 passed in 0.03s ==============================
+============================= 17 passed in 0.03s ==============================
 ```
+
+### Confidence Level
+
+**⭐⭐⭐⭐⭐ (5 / 5)** — All 17 tests pass consistently covering happy paths **and** edge cases across sorting, filtering, recurrence, and conflict detection. The system handles boundary conditions (untimed tasks, `as-needed` frequency, three-way conflicts, empty inputs) without errors, giving high confidence in reliability.
 
 ## 🏗️ Implementation Summary
 
