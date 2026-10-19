@@ -41,13 +41,27 @@ The initial UML design follows a separation of concerns by isolating data models
 
 **a. Constraints and priorities**
 
-- What constraints does your scheduler consider (for example: time, priority, preferences)?
-- How did you decide which constraints mattered most?
+- **Constraints considered**:
+  - *Time Availability*: The owner's hard daily limit on pet care minutes (`available_time_minutes`).
+  - *Medical / Mandatory Status*: Tasks flagged with `is_mandatory=True` (e.g. daily insulin or eye drops) receive top weighting.
+  - *Priority Level*: Tasks are categorized as `high`, `medium`, or `low` priority.
+  - *Cadence / Recurrence*: Tasks recur on either a `daily` (+1 day) or `weekly` (+7 days) schedule calculated via Python's `timedelta`.
+  - *Completion Status*: Completed tasks are filtered out of active scheduling so they do not consume daily budget.
+- **Priority hierarchy rationale**:
+  - Medical and mandatory tasks matter most because omitting critical pet care has direct physical health consequences.
+  - Among remaining care, priority level dictates scheduling order, with task duration acting as a secondary tie-breaker to greedily fit care within available owner minutes.
 
 **b. Tradeoffs**
 
-- Describe one tradeoff your scheduler makes.
-- Why is that tradeoff reasonable for this scenario?
+1. **Greedy Priority-First Ordering vs. Optimal Knapsack Packing**:
+   - *The Tradeoff*: The scheduler sorts tasks in descending order of priority score rather than solving a 0/1 knapsack problem to maximize minutes spent.
+   - *Why it's reasonable*: In real pet care, completing an essential 35-minute park walk or medication is far more important than squeezing in three trivial 10-minute brushings. A priority-first approach produces predictable, trustworthy routines.
+
+2. **Exact Time Collision Detection vs. Continuous Interval Overlap Checking**:
+   - *The Tradeoff*: The `detect_conflicts()` algorithm checks for exact start-time collisions (`t1.preferred_time == t2.preferred_time`) rather than blocking any overlapping time intervals based on duration.
+   - *Why it's reasonable*:
+     - *Simplicity & Performance*: Exact matching is simple to understand, runs quickly without complex interval tree structures, and catches the primary user mistake (scheduling two pets for care at the identical minute, such as 08:00 AM).
+     - *Owner Multi-Tasking Flexibility*: In reality, pet care tasks often overlap in parallel without issue (e.g., Biscuit eating breakfast while the owner administers Mochi's eye drops). Hard-blocking entire time spans would create false-positive conflicts and unnecessarily prevent owners from scheduling routines that they can easily manage concurrently.
 
 ---
 

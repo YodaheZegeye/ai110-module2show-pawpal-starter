@@ -52,6 +52,8 @@ classDiagram
     class Scheduler {
         +str strategy
         +generate_plan(owner: Owner, tasks: List~Task~, available_time_minutes: int, pet: Pet, start_time: str) Schedule
+        +sort_by_time(tasks: List~Task~) List~Task~
+        +filter_tasks(tasks: List~Task~, completed: bool, pet_name: str) List~Task~
         -sort_tasks(tasks: List~Task~) List~Task~
         -evaluate_fit(task: Task, remaining_time: int) tuple
     }

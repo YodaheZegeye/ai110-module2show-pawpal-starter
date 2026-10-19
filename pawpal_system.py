@@ -11,6 +11,7 @@ Logic layer for PawPal+ containing the core domain classes:
 """
 
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from typing import List, Optional, Dict, Any, Tuple
 
 
@@ -39,6 +40,7 @@ class Task:
     pet_name: Optional[str] = None
     frequency: str = "daily"  # 'daily', 'weekly', 'as-needed'
     completed: bool = False
+    due_date: Optional[str] = None
 
     def get_priority_score(self) -> int:
         """Calculate and return numerical priority score with mandatory weighting."""
@@ -48,13 +50,47 @@ class Task:
             score += 100
         return score
 
-    def mark_completed(self) -> None:
-        """Mark this task as completed."""
-        self.completed = True
+    def mark_completed(self, base_date: Optional[date] = None) -> Optional["Task"]:
+        """
+        Mark task as completed and automatically generate the next recurring instance.
 
-    def mark_complete(self) -> None:
-        """Alias for mark_completed() to mark task as completed."""
-        self.mark_completed()
+        For 'daily' tasks, schedules the next occurrence for base_date + 1 day.
+        For 'weekly' tasks, schedules the next occurrence for base_date + 7 days.
+        For non-recurring or 'as-needed' tasks, returns None.
+
+        Args:
+            base_date: Reference date for recurrence calculation (defaults to date.today()).
+
+        Returns:
+            A new pending Task instance for the next occurrence, or None if non-recurring.
+        """
+        self.completed = True
+        ref_date = base_date or date.today()
+
+        freq = (self.frequency or "").lower()
+        if freq == "daily":
+            next_date = ref_date + timedelta(days=1)
+        elif freq == "weekly":
+            next_date = ref_date + timedelta(weeks=1)
+        else:
+            return None
+
+        return Task(
+            title=self.title,
+            duration_minutes=self.duration_minutes,
+            priority=self.priority,
+            category=self.category,
+            is_mandatory=self.is_mandatory,
+            preferred_time=self.preferred_time,
+            pet_name=self.pet_name,
+            frequency=self.frequency,
+            completed=False,
+            due_date=next_date.isoformat(),
+        )
+
+    def mark_complete(self, base_date: Optional[date] = None) -> Optional["Task"]:
+        """Alias for mark_completed()."""
+        return self.mark_completed(base_date=base_date)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert task attributes into a dictionary format for UI tables."""
@@ -67,6 +103,7 @@ class Task:
             "mandatory": self.is_mandatory,
             "preferred_time": self.preferred_time or "Flexible",
             "frequency": self.frequency,
+            "due_date": self.due_date or "Today",
             "completed": self.completed,
         }
 
@@ -85,6 +122,22 @@ class Pet:
         if not task.pet_name:
             task.pet_name = self.name
         self.tasks.append(task)
+
+    def mark_task_complete(self, task: Task, base_date: Optional[date] = None) -> Optional[Task]:
+        """
+        Mark a pet's task as complete and append its next recurring occurrence if applicable.
+
+        Args:
+            task: The Task to mark completed.
+            base_date: Optional reference date for calculating the next recurrence.
+
+        Returns:
+            The newly created recurring Task instance if recurring, or None.
+        """
+        next_task = task.mark_complete(base_date=base_date)
+        if next_task is not None:
+            self.add_task(next_task)
+        return next_task
 
     def get_summary(self) -> str:
         """Return a formatted string summarizing the pet's profile."""
@@ -109,6 +162,25 @@ class Owner:
         """Associate a pet with this owner."""
         if pet not in self.pets:
             self.pets.append(pet)
+
+    def mark_task_complete(self, task: Task, base_date: Optional[date] = None) -> Optional[Task]:
+        """
+        Mark a task complete across owner's pets and add recurring instance to the matching pet.
+
+        Args:
+            task: The Task to complete.
+            base_date: Optional reference date for recurrence calculation.
+
+        Returns:
+            The newly created recurring Task instance if recurring, or None.
+        """
+        next_task = task.mark_complete(base_date=base_date)
+        if next_task is not None:
+            for p in self.pets:
+                if p.name == task.pet_name:
+                    p.add_task(next_task)
+                    break
+        return next_task
 
     def set_available_time(self, minutes: int) -> None:
         """Set the owner's total time budget for pet care today."""
@@ -139,6 +211,7 @@ class Schedule:
     unscheduled_tasks: List[Dict[str, Any]] = field(default_factory=list)
     total_duration_minutes: int = 0
     reasoning: List[str] = field(default_factory=list)
+    conflicts: List[str] = field(default_factory=list)
 
     @property
     def remaining_time_minutes(self) -> int:
@@ -201,6 +274,11 @@ class Schedule:
                     f"  - {item['title']} ({item['duration_minutes']} min) [{item['pet_name']}] - {item['reason']}"
                 )
 
+        if self.conflicts:
+            lines.append("\nTime Conflicts & Warnings:")
+            for warn in self.conflicts:
+                lines.append(f"  ! {warn}")
+
         lines.append("\nScheduling Rationale:")
         for note in self.reasoning:
             lines.append(f"  - {note}")
@@ -244,7 +322,8 @@ class Scheduler:
         schedule = Schedule(
             owner_name=owner_name,
             pet=pet,
-            available_time_minutes=budget
+            available_time_minutes=budget,
+            conflicts=self.detect_conflicts(task_pool)
         )
 
         # 2. Sort tasks by priority, mandatory status, and duration
@@ -272,8 +351,91 @@ class Scheduler:
 
         return schedule
 
+    def detect_conflicts(self, tasks: List[Task]) -> List[str]:
+        """
+        Identify pairwise time conflicts between tasks with identical preferred times.
+
+        Scans tasks for identical 'HH:MM' time slots across the same pet or different pets.
+        Generates descriptive warning messages without halting execution or raising exceptions.
+
+        Args:
+            tasks: List of Task objects to inspect for time collisions.
+
+        Returns:
+            A list of user-facing warning strings detailing conflicting tasks and times.
+        """
+        warnings: List[str] = []
+        timed_tasks = [t for t in tasks if t.preferred_time and ":" in t.preferred_time]
+
+        for i in range(len(timed_tasks)):
+            for j in range(i + 1, len(timed_tasks)):
+                t1 = timed_tasks[i]
+                t2 = timed_tasks[j]
+                if t1.preferred_time == t2.preferred_time:
+                    p1 = t1.pet_name or "Unassigned"
+                    p2 = t2.pet_name or "Unassigned"
+                    target = f"the same pet ({p1})" if p1 == p2 else f"different pets ({p1} and {p2})"
+                    warnings.append(
+                        f"Warning: Conflict at {t1.preferred_time}! '{t1.title}' and '{t2.title}' are scheduled at the same time for {target}."
+                    )
+        return warnings
+
+    def sort_by_time(self, tasks: List[Task]) -> List[Task]:
+        """
+        Sort tasks chronologically by preferred_time ('HH:MM') using a lambda key.
+
+        Timed tasks ('HH:MM') are sorted earlier in chronological order.
+        Untimed or flexible tasks (preferred_time is None) are placed at the end.
+
+        Args:
+            tasks: List of Task objects to sort.
+
+        Returns:
+            A new list of Task objects sorted chronologically.
+        """
+        return sorted(
+            tasks,
+            key=lambda t: (0, t.preferred_time) if (t.preferred_time and ":" in t.preferred_time) else (1, "99:99")
+        )
+
+    def filter_tasks(
+        self,
+        tasks: List[Task],
+        completed: Optional[bool] = None,
+        pet_name: Optional[str] = None
+    ) -> List[Task]:
+        """
+        Filter a list of tasks by completion status, pet name, or both criteria.
+
+        Args:
+            tasks: The collection of Task objects to filter.
+            completed: If specified (True/False), filters tasks matching completion state.
+            pet_name: If specified, filters tasks assigned to this specific pet.
+
+        Returns:
+            A filtered list of Task objects satisfying all provided criteria.
+        """
+        filtered = list(tasks)
+        if completed is not None:
+            filtered = [t for t in filtered if t.completed == completed]
+        if pet_name is not None:
+            filtered = [t for t in filtered if t.pet_name == pet_name]
+        return filtered
+
     def _sort_tasks(self, tasks: List[Task]) -> List[Task]:
-        """Sort tasks by mandatory status, priority score, and duration."""
+        """
+        Sort tasks using a multi-criteria priority heuristic.
+
+        Orders tasks by:
+        1. Priority score (mandatory items boosted by +100, then high > medium > low).
+        2. Duration (longer tasks first as tiebreaker to greedily allocate available time).
+
+        Args:
+            tasks: List of Task objects to prioritize.
+
+        Returns:
+            Sorted list of Task objects ordered from highest to lowest urgency.
+        """
         return sorted(
             tasks,
             key=lambda t: (
@@ -284,7 +446,16 @@ class Scheduler:
         )
 
     def _evaluate_fit(self, task: Task, remaining_time: int) -> Tuple[bool, str]:
-        """Determine whether a task fits within the remaining time budget."""
+        """
+        Evaluate if a task fits within the remaining time budget and provide reasoning.
+
+        Args:
+            task: The Task being evaluated.
+            remaining_time: Current remaining minutes in the owner's budget.
+
+        Returns:
+            Tuple of (fits_boolean, explanation_reason_string).
+        """
         if task.duration_minutes <= remaining_time:
             importance = "Mandatory item" if task.is_mandatory else f"{task.priority.capitalize()} priority"
             return True, f"Fits within available time ({task.duration_minutes} min allocated, {remaining_time - task.duration_minutes} min remaining). {importance}."
