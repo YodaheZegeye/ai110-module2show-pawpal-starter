@@ -6,6 +6,7 @@ classDiagram
         +List~str~ preferences
         +List~Task~ tasks
         +add_task(task: Task) void
+        +mark_task_complete(task: Task, base_date: date) Task
         +get_summary() str
         +add_preference(pref: str) void
     }
@@ -15,6 +16,7 @@ classDiagram
         +int available_time_minutes
         +List~Pet~ pets
         +add_pet(pet: Pet) void
+        +mark_task_complete(task: Task, base_date: date) Task
         +set_available_time(minutes: int) void
         +get_available_time() int
         +get_all_tasks() List~Task~
@@ -22,16 +24,18 @@ classDiagram
 
     class Task {
         +str title
-        +str category
         +int duration_minutes
         +str priority
+        +str category
         +bool is_mandatory
         +str preferred_time
         +str pet_name
         +str frequency
         +bool completed
+        +str due_date
         +get_priority_score() int
-        +mark_completed() void
+        +mark_completed(base_date: date) Task
+        +mark_complete(base_date: date) Task
         +to_dict() dict
     }
 
@@ -43,6 +47,7 @@ classDiagram
         +List~dict~ unscheduled_tasks
         +int total_duration_minutes
         +List~str~ reasoning
+        +List~str~ conflicts
         +remaining_time_minutes int
         +add_scheduled_task(task: Task, time_slot: str, reason: str) void
         +add_unscheduled_task(task: Task, reason: str) void
@@ -52,6 +57,7 @@ classDiagram
     class Scheduler {
         +str strategy
         +generate_plan(owner: Owner, tasks: List~Task~, available_time_minutes: int, pet: Pet, start_time: str) Schedule
+        +detect_conflicts(tasks: List~Task~) List~str~
         +sort_by_time(tasks: List~Task~) List~Task~
         +filter_tasks(tasks: List~Task~, completed: bool, pet_name: str) List~Task~
         -sort_tasks(tasks: List~Task~) List~Task~
@@ -59,9 +65,10 @@ classDiagram
     }
 
     Owner "1" --> "0..*" Pet : owns
-    Pet "1" --> "0..*" Task : has
+    Pet "1" --> "0..*" Task : manages
+    Owner ..> Task : marks complete
     Scheduler ..> Owner : reads get_all_tasks
     Scheduler ..> Schedule : creates
-    Scheduler ..> Task : schedules
-    Schedule "1" --> "0..*" Task : includes
+    Scheduler ..> Task : sorts, filters, checks conflicts
+    Schedule "1" --> "0..*" Task : references
     Schedule --> "0..1" Pet : plans for

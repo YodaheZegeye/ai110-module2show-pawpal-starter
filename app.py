@@ -5,10 +5,13 @@ st.set_page_config(page_title="PawPal+", page_icon="🐾", layout="wide")
 
 st.title("🐾 PawPal+ Pet Care Planner")
 
+# Shared Scheduler instance for sorting, filtering, and conflict detection
+scheduler = Scheduler()
+
 # --- 1. Session State Initialization ("App Memory") ---
 if "owner" not in st.session_state:
     default_owner = Owner(name="Yodahe", available_time_minutes=75)
-    
+
     # Pre-populate with starter pets so the app is immediately testable
     biscuit = Pet(
         name="Biscuit",
@@ -16,8 +19,8 @@ if "owner" not in st.session_state:
         energy_level="high",
         preferences=["Morning outdoor walk", "Loves fetch"]
     )
-    biscuit.add_task(Task(title="Morning park walk", duration_minutes=35, priority="high", category="walk"))
-    biscuit.add_task(Task(title="Brush coat & check paws", duration_minutes=20, priority="low", category="grooming"))
+    biscuit.add_task(Task(title="Morning park walk", duration_minutes=35, priority="high", category="walk", preferred_time="08:00", frequency="daily"))
+    biscuit.add_task(Task(title="Brush coat & check paws", duration_minutes=20, priority="low", category="grooming", preferred_time="14:00", frequency="weekly"))
 
     mochi = Pet(
         name="Mochi",
@@ -25,8 +28,8 @@ if "owner" not in st.session_state:
         energy_level="low",
         preferences=["Quiet feeding spot"]
     )
-    mochi.add_task(Task(title="Administer allergy medication", duration_minutes=10, priority="high", category="medication", is_mandatory=True))
-    mochi.add_task(Task(title="Interactive laser & feather play", duration_minutes=20, priority="medium", category="enrichment"))
+    mochi.add_task(Task(title="Administer allergy medication", duration_minutes=10, priority="high", category="medication", is_mandatory=True, preferred_time="08:00", frequency="daily"))
+    mochi.add_task(Task(title="Interactive laser & feather play", duration_minutes=20, priority="medium", category="enrichment", preferred_time="15:30"))
 
     default_owner.add_pet(biscuit)
     default_owner.add_pet(mochi)
@@ -61,7 +64,7 @@ col_left, col_right = st.columns([1, 1])
 # --- 3. Pet Management Section ---
 with col_left:
     st.subheader("🐶 Manage Pets")
-    
+
     # Display registered pets
     if owner.pets:
         for p in owner.pets:
@@ -97,7 +100,7 @@ with col_left:
 # --- 4. Task Management Section ---
 with col_right:
     st.subheader("📋 Add Pet Care Tasks")
-    
+
     if not owner.pets:
         st.info("Add a pet first before adding tasks.")
     else:
@@ -105,25 +108,34 @@ with col_right:
         with st.form("add_task_form"):
             target_pet_name = st.selectbox("Assign to Pet", pet_options)
             task_title = st.text_input("Task Title", placeholder="e.g., Evening medication")
-            
+
             c1, c2 = st.columns(2)
             with c1:
                 duration = st.number_input("Duration (minutes)", min_value=1, max_value=240, value=20, step=5)
                 priority = st.selectbox("Priority", ["high", "medium", "low"], index=1)
+                preferred_time = st.text_input(
+                    "Preferred Time (HH:MM)",
+                    placeholder="e.g., 08:00",
+                    help="24-hour format. Leave blank for flexible scheduling."
+                )
             with c2:
                 category = st.selectbox("Category", ["walk", "feeding", "medication", "grooming", "enrichment", "other"])
                 is_mandatory = st.checkbox("Mandatory (non-negotiable)", value=False)
-            
+                frequency = st.selectbox("Frequency", ["daily", "weekly", "as-needed"], index=0)
+
             submit_task = st.form_submit_button("Add Task")
 
             if submit_task:
                 if task_title.strip():
+                    clean_time = preferred_time.strip() if preferred_time.strip() else None
                     new_task = Task(
                         title=task_title.strip(),
                         duration_minutes=int(duration),
                         priority=priority,
                         category=category,
-                        is_mandatory=is_mandatory
+                        is_mandatory=is_mandatory,
+                        preferred_time=clean_time,
+                        frequency=frequency,
                     )
                     # Locate the pet and call Pet.add_task()
                     target_pet = next(p for p in owner.pets if p.name == target_pet_name)
@@ -133,14 +145,96 @@ with col_right:
                 else:
                     st.error("Task title cannot be blank.")
 
-# --- 5. Current Tasks Table ---
+# --- 5. Current Tasks — Sorted & Filtered ---
 st.divider()
 st.subheader("📝 All Current Tasks Across Pets")
+
 all_tasks = owner.get_all_tasks()
 
 if all_tasks:
-    tasks_data = [t.to_dict() for t in all_tasks]
-    st.dataframe(tasks_data, use_container_width=True)
+    # --- Conflict Detection Banner (always visible) ---
+    conflict_warnings = scheduler.detect_conflicts(all_tasks)
+    if conflict_warnings:
+        st.markdown("#### ⚠️ Scheduling Conflicts Detected")
+        for warn in conflict_warnings:
+            st.warning(warn, icon="⚠️")
+
+    # --- Filter Controls ---
+    filter_col1, filter_col2, filter_col3 = st.columns([1, 1, 2])
+    with filter_col1:
+        pet_names = ["All Pets"] + [p.name for p in owner.pets]
+        selected_pet = st.selectbox("Filter by Pet", pet_names, key="filter_pet")
+    with filter_col2:
+        status_options = ["All", "Pending Only", "Completed Only"]
+        selected_status = st.selectbox("Filter by Status", status_options, key="filter_status")
+
+    # Apply Scheduler.filter_tasks()
+    pet_filter = None if selected_pet == "All Pets" else selected_pet
+    status_filter = None
+    if selected_status == "Pending Only":
+        status_filter = False
+    elif selected_status == "Completed Only":
+        status_filter = True
+
+    filtered_tasks = scheduler.filter_tasks(all_tasks, completed=status_filter, pet_name=pet_filter)
+
+    # Apply Scheduler.sort_by_time() for chronological display
+    sorted_tasks = scheduler.sort_by_time(filtered_tasks)
+
+    with filter_col3:
+        st.caption(f"Showing **{len(sorted_tasks)}** of {len(all_tasks)} tasks — sorted chronologically by `sort_by_time()`")
+
+    # Build the display table from sorted/filtered results
+    if sorted_tasks:
+        table_data = []
+        for t in sorted_tasks:
+            status_icon = "✅" if t.completed else "⏳"
+            priority_badge = {"high": "🔴 High", "medium": "🟡 Medium", "low": "🟢 Low"}.get(t.priority, t.priority)
+            table_data.append({
+                "Time": t.preferred_time or "Flexible",
+                "Task": t.title,
+                "Pet": t.pet_name or "Unassigned",
+                "Duration": f"{t.duration_minutes} min",
+                "Priority": priority_badge,
+                "Frequency": t.frequency.capitalize() if t.frequency else "—",
+                "Mandatory": "Yes" if t.is_mandatory else "No",
+                "Status": status_icon,
+            })
+        st.dataframe(table_data, use_container_width=True, hide_index=True)
+    else:
+        st.info("No tasks match the current filter criteria.")
+
+    # --- Mark Complete Buttons with Recurrence ---
+    st.markdown("#### ✔️ Mark Tasks Complete")
+    st.caption("Completing a recurring task automatically creates the next occurrence via `timedelta`.")
+
+    pending_tasks = scheduler.filter_tasks(all_tasks, completed=False)
+    if pending_tasks:
+        for i, task in enumerate(pending_tasks):
+            col_btn, col_desc = st.columns([1, 4])
+            with col_btn:
+                if st.button(f"Complete", key=f"complete_{i}_{task.title}", use_container_width=True):
+                    next_task = owner.mark_task_complete(task)
+                    if next_task:
+                        st.session_state[f"recurrence_msg_{i}"] = (
+                            f"✅ Completed **'{task.title}'** ({task.frequency}). "
+                            f"Next occurrence auto-created for **{next_task.due_date}**."
+                        )
+                    else:
+                        st.session_state[f"recurrence_msg_{i}"] = (
+                            f"✅ Completed **'{task.title}'** (no recurrence — {task.frequency})."
+                        )
+                    st.rerun()
+            with col_desc:
+                time_label = f"[{task.preferred_time}]" if task.preferred_time else "[Flexible]"
+                freq_label = f" · {task.frequency.capitalize()}" if task.frequency else ""
+                st.markdown(f"{time_label} **{task.title}** — *{task.pet_name}* ({task.duration_minutes} min){freq_label}")
+
+            # Show recurrence feedback if it was just completed
+            if f"recurrence_msg_{i}" in st.session_state:
+                st.success(st.session_state.pop(f"recurrence_msg_{i}"))
+    else:
+        st.success("🎉 All tasks are complete! No pending items.")
 else:
     st.info("No tasks recorded yet.")
 
@@ -153,7 +247,6 @@ sched_col1, sched_col2 = st.columns([1, 3])
 with sched_col1:
     start_time_input = st.text_input("Start Time", value="08:00")
     if st.button("⚡ Generate Schedule", type="primary", use_container_width=True):
-        scheduler = Scheduler()
         # Backend connection: Scheduler reads directly from Owner
         st.session_state.schedule = scheduler.generate_plan(
             owner=owner,
@@ -190,11 +283,11 @@ with sched_col2:
                     f"**{item['title']}** ({item['duration_minutes']} min) for *{item['pet_name']}* — {item['reason']}"
                 )
 
-        # Display Time Conflicts & Warnings if any
+        # Display Time Conflicts & Warnings from the generated schedule
         if current_schedule.conflicts:
-            st.markdown("#### ⚠️ Time Conflicts Detected")
+            st.markdown("#### ⚠️ Time Conflicts in Generated Plan")
             for c in current_schedule.conflicts:
-                st.warning(c)
+                st.warning(c, icon="⚠️")
 
         # Display Reasoning Breakdown
         with st.expander("🧠 Scheduler Decision Rationale"):
@@ -203,4 +296,3 @@ with sched_col2:
 
         with st.expander("📋 Raw Text Schedule Output"):
             st.code(current_schedule.get_formatted_plan(), language="text")
-
